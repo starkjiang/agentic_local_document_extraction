@@ -1,0 +1,55 @@
+version: "3.8"
+
+services:
+  # Ollama - Local LLM server
+  ollama:
+    image: ollama/ollama:latest
+    container_name: pdf_agent_ollama
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "11434:11434"
+    environment:
+      - OLLAMA_KEEP_ALIVE=24h
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    # Remove deploy.resources for CPU-only deployment
+
+  # PDF Extraction API
+  api:
+    build: .
+    container_name: pdf_agent_api
+    ports:
+      - "8000:8000"
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - OLLAMA_MODEL=llama3.2:1b
+      - OLLAMA_EMBEDDING_MODEL=nomic-embed-text
+      - CHROMA_PERSIST_DIR=/app/chroma_db
+      - UPLOAD_DIR=/app/uploads
+      - OUTPUT_DIR=/app/outputs
+    volumes:
+      - ./uploads:/app/uploads
+      - ./outputs:/app/outputs
+      - chroma_data:/app/chroma_db
+    depends_on:
+      - ollama
+    command: >
+      sh -c "
+        echo 'Waiting for Ollama...' &&
+        sleep 10 &&
+        echo 'Pulling models...' &&
+        curl -X POST http://ollama:11434/api/pull -d '{\"name\":\"llama3.2\"}' &&
+        curl -X POST http://ollama:11434/api/pull -d '{\"name\":\"nomic-embed-text\"}' &&
+        echo 'Starting API...' &&
+        uvicorn src.api.main:app --host 0.0.0.0 --port 8000
+      "
+
+volumes:
+  ollama_data:
+  chroma_data:
