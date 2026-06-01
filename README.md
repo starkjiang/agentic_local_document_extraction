@@ -1,6 +1,6 @@
 # PDF Multi-Agent Extraction System
 
-A near production-ready, fully local PDF extraction pipeline using multi-agent orchestration. No API keys, no cloud dependencies — runs entirely on your machine with open-source tools.
+A fully local PDF extraction pipeline using multi-agent orchestration. No API keys, no cloud dependencies — runs entirely on your machine with open-source tools.
 
 ## 🏗️ Architecture
 
