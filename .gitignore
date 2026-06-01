@@ -99,8 +99,6 @@ ui/yarn-error.log*
 
 # Docker
 .dockerignore
-.docker-compose.yml
-Dockerfile.dockerfile
 
 # Misc temp files
 *.bak

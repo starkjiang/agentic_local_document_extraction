@@ -77,7 +77,7 @@ pdf_multiagent/
 ### 1. Clone & Setup
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/starkjiang/agentic_local_document_extraction.git
 cd pdf_multiagent
 
 # Create virtual environment
