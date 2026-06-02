@@ -15,9 +15,9 @@ services:
       resources:
         reservations:
           devices:
-            - driver: nvidia
+            - driver: nvidia # Need adjustment if no GPU or different GPU setup
               count: all
-              capabilities: [gpu]
+              capabilities: [gpu] # Use 'gpu' capability for GPU deployment, remove if CPU-only
     # Remove deploy.resources for CPU-only deployment
 
   # PDF Extraction API
