@@ -4,7 +4,7 @@ Pydantic models for structured data validation across the agent pipeline.
 
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Literal
 from uuid import UUID, uuid4
 
 from pathlib import Path
@@ -156,4 +156,49 @@ class JobState(BaseModel):
     final_output: Optional[SynthesizedOutput] = None
     retry_count: int = 0
     error_message: Optional[str] = None
+
+
+class ExtractionMode(str, Enum):
+    """Extraction modes."""
+    FULL = "full"                    # Current behavior
+    CHAT_DRIVEN = "chat"             # New: user provides prompt
+    SECTION = "section"              # Extract specific section
+    SUMMARY = "summary"              # Summarize in custom format
+    ENTITIES = "entities"            # Extract specific entities
+    CUSTOM_JSON = "custom_json"      # Output as custom JSON schema
+
+
+class UserPrompt(BaseModel):
+    """User's extraction request."""
+    prompt: str = Field(..., min_length=1, max_length=2000)
+    mode: ExtractionMode = ExtractionMode.CHAT_DRIVEN
+    output_format: Optional[str] = None  # e.g., "bullet_points", "json", "table"
+    target_sections: Optional[List[str]] = None  # e.g., ["methods", "results"]
+    max_length: Optional[int] = Field(default=500, ge=50, le=5000)
+    include_raw_text: bool = False
+
+
+class PromptInterpretation(BaseModel):
+    """LLM's understanding of user intent."""
+    intent: str  # "extract_section", "summarize", "find_entities", etc.
+    target_sections: List[str]
+    output_format: str  # "bullet_points", "paragraph", "json", "table"
+    constraints: List[str]  # e.g., ["max_3_points", "include_dates"]
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
+class ChatMessage(BaseModel):
+    """Chat history message."""
+    role: Literal["user", "assistant", "system"]
+    content: str
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+
+class ChatSession(BaseModel):
+    """User chat session for iterative refinement."""
+    session_id: str = Field(default_factory=lambda: str(uuid4()))
+    job_id: Optional[str] = None
+    messages: List[ChatMessage] = []
+    current_prompt: Optional[UserPrompt] = None
+    extraction_result: Optional[SynthesizedOutput] = None
     

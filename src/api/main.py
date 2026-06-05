@@ -8,10 +8,10 @@ import shutil
 import hashlib
 import time
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Dict
 from uuid import uuid4
 
-from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks, Query
+from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks, Query, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -20,6 +20,10 @@ from src.state import AgentState
 from src.graph.workflow import pdf_extraction_graph
 from src.tools.vector_tools import vector_store
 from src.tools.llm_tools import ollama_client
+
+from src.agents.prompt_interpreter import prompt_interpreter
+from src.agents.custom_extractor import custom_extractor
+from src.models import UserPrompt, ChatSession, ChatMessage
 
 
 # FastAPI app
@@ -311,6 +315,142 @@ async def delete_job(job_id: str):
     del job_store[job_id]
     
     return {"message": "Job deleted successfully"}
+
+
+# In-memory chat sessions (use Redis in production)
+chat_sessions: Dict[str, ChatSession] = {}
+
+
+@app.post("/extract/chat")
+async def extract_with_chat(
+    file: UploadFile = File(...),
+    prompt: str = Form(..., description="User extraction request, e.g., 'Extract methods as bullet points'"),
+    strategy: str = Query(default="auto")
+):
+    """
+    Upload PDF with a natural language prompt for custom extraction.
+    
+    Example prompts:
+    - "Extract the methods section as bullet points"
+    - "Summarize the key findings in 3 sentences"
+    - "Extract all authors and dates mentioned"
+    - "Compare results and discussion sections"
+    """
+    # Save file
+    job_id = str(uuid4())
+    file_path = settings.UPLOAD_DIR / f"{job_id}_{file.filename}"
+    with open(file_path, "wb") as f:
+        shutil.copyfileobj(file.file, f)
+    
+    # Step 1: Interpret the prompt
+    user_prompt = UserPrompt(prompt=prompt)
+    interpretation = prompt_interpreter.interpret(user_prompt)
+    
+    # Step 2: Run standard extraction first
+    initial_state: AgentState = {
+        "file_path": str(file_path),
+        "filename": file.filename,
+        "file_hash": "",
+        "extraction_strategy": strategy,
+        "extraction_result": None,
+        "validation_result": None,
+        "synthesized_output": None,
+        "current_step": "pending",
+        "retry_count": 0,
+        "max_retries": settings.MAX_RETRIES,
+        "should_retry": False,
+        "retry_strategy": None,
+        "errors": [],
+        "warnings": [],
+        "logs": [],
+        "final_markdown": None,
+        "final_json": None,
+        "vector_ids": [],
+        "job_completed": False
+    }
+    
+    # Run extraction graph
+    config = {"configurable": {"thread_id": job_id}}
+    result = pdf_extraction_graph.invoke(initial_state, config)
+    
+    # Step 3: Apply custom extraction if we have markdown
+    custom_result = None
+    if result.get("job_completed") and result.get("final_markdown"):
+        custom_result = custom_extractor.extract(result, interpretation)
+    
+    # Create chat session
+    session = ChatSession(
+        session_id=str(uuid4()),
+        job_id=job_id,
+        messages=[
+            ChatMessage(role="user", content=prompt),
+            ChatMessage(
+                role="assistant", 
+                content=f"I'll extract: {interpretation.intent} | Format: {interpretation.output_format} | Sections: {', '.join(interpretation.target_sections)}"
+            )
+        ],
+        current_prompt=user_prompt,
+        extraction_result=result.get("synthesized_output")
+    )
+    chat_sessions[session.session_id] = session
+    
+    return {
+        "session_id": session.session_id,
+        "job_id": job_id,
+        "interpretation": interpretation.model_dump(),
+        "standard_result": result.get("synthesized_output"),
+        "custom_extraction": custom_result,
+        "status": "completed" if result.get("job_completed") else "failed"
+    }
+
+
+@app.post("/chat/{session_id}/refine")
+async def refine_extraction(session_id: str, feedback: str = Form(...)):
+    """
+    Refine extraction based on user feedback.
+    
+    Example: "Make it shorter" or "Add more detail about methods"
+    """
+    if session_id not in chat_sessions:
+        raise HTTPException(404, "Session not found")
+    
+    session = chat_sessions[session_id]
+    
+    # Get original markdown
+    job = job_store.get(session.job_id, {})
+    markdown = job.get("state", {}).get("final_markdown", "")
+    
+    if not markdown:
+        raise HTTPException(400, "No document content available for refinement")
+    
+    # Refine
+    previous = session.custom_extraction or session.extraction_result
+    refined = custom_extractor.refine(str(previous), feedback, markdown)
+    
+    # Update session
+    session.messages.append(ChatMessage(role="user", content=feedback))
+    session.messages.append(ChatMessage(role="assistant", content=refined))
+    
+    return {
+        "session_id": session_id,
+        "refined_extraction": refined,
+        "chat_history": [m.model_dump() for m in session.messages]
+    }
+
+
+@app.get("/chat/{session_id}")
+async def get_chat_session(session_id: str):
+    """Get chat session history and current extraction."""
+    if session_id not in chat_sessions:
+        raise HTTPException(404, "Session not found")
+    
+    session = chat_sessions[session_id]
+    return {
+        "session_id": session_id,
+        "job_id": session.job_id,
+        "messages": [m.model_dump() for m in session.messages],
+        "current_extraction": session.extraction_result
+    }
 
 
 if __name__ == "__main__":

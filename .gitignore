@@ -74,6 +74,7 @@ uploads/
 outputs/
 tmp/
 chroma_db/
+sample_pdf/
 *.db
 *.sqlite3
 

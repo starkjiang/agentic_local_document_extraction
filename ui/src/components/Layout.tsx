@@ -1,6 +1,6 @@
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Upload, History, Search, FileText, Activity } from 'lucide-react';
+import { Upload, History, Search, FileText, Activity, Bot } from 'lucide-react';
 
 export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const location = useLocation();
@@ -9,6 +9,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
     { path: '/', label: 'Upload', icon: <Upload size={20} /> },
     { path: '/jobs', label: 'Jobs', icon: <History size={20} /> },
     { path: '/search', label: 'Search', icon: <Search size={20} /> },
+    { path: '/chat', label: 'Chat Extract', icon: <Bot size={20} /> },
   ];
 
   return (
