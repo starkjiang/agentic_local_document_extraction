@@ -319,12 +319,13 @@ async def delete_job(job_id: str):
 
 # In-memory chat sessions (use Redis in production)
 chat_sessions: Dict[str, ChatSession] = {}
+custom_extractions: Dict[str, Dict] = {}
 
 
 @app.post("/extract/chat")
 async def extract_with_chat(
     file: UploadFile = File(...),
-    prompt: str = Form(..., description="User extraction request, e.g., 'Extract methods as bullet points'"),
+    prompt: str = Query(..., description="User extraction request, e.g., 'Extract methods as bullet points'"),
     strategy: str = Query(default="auto")
 ):
     """
@@ -372,11 +373,19 @@ async def extract_with_chat(
     # Run extraction graph
     config = {"configurable": {"thread_id": job_id}}
     result = pdf_extraction_graph.invoke(initial_state, config)
+
+    job_store[job_id] = {
+        "status": "completed" if result.get("job_completed") else "failed",
+        "filename": file.filename,
+        "created_at": time.time(),
+        "state": result
+    }
     
     # Step 3: Apply custom extraction if we have markdown
     custom_result = None
     if result.get("job_completed") and result.get("final_markdown"):
         custom_result = custom_extractor.extract(result, interpretation)
+        custom_extractions[job_id] = custom_result
     
     # Create chat session
     session = ChatSession(
@@ -386,7 +395,7 @@ async def extract_with_chat(
             ChatMessage(role="user", content=prompt),
             ChatMessage(
                 role="assistant", 
-                content=f"I'll extract: {interpretation.intent} | Format: {interpretation.output_format} | Sections: {', '.join(interpretation.target_sections)}"
+                content=f"Extracted: {interpretation.intent} | Format: {interpretation.output_format} | Sections: {', '.join(interpretation.target_sections)}"
             )
         ],
         current_prompt=user_prompt,
@@ -398,14 +407,20 @@ async def extract_with_chat(
         "session_id": session.session_id,
         "job_id": job_id,
         "interpretation": interpretation.model_dump(),
-        "standard_result": result.get("synthesized_output"),
-        "custom_extraction": custom_result,
+        "custom_extraction": {
+            "content": custom_result.get("content", "") if custom_result else "",
+            "format": interpretation.output_format,
+            "intent": interpretation.intent
+        },
         "status": "completed" if result.get("job_completed") else "failed"
     }
 
 
 @app.post("/chat/{session_id}/refine")
-async def refine_extraction(session_id: str, feedback: str = Form(...)):
+async def refine_extraction(
+    session_id: str,
+    feedback: str = Query(..., description="User feedback for refinement")
+):
     """
     Refine extraction based on user feedback.
     
@@ -415,17 +430,31 @@ async def refine_extraction(session_id: str, feedback: str = Form(...)):
         raise HTTPException(404, "Session not found")
     
     session = chat_sessions[session_id]
+    job_id = session.job_id
     
     # Get original markdown
-    job = job_store.get(session.job_id, {})
-    markdown = job.get("state", {}).get("final_markdown", "")
+    job = job_store.get(job_id)
+    if not job:
+        raise HTTPException(404, "Associated job not found")
     
+    markdown = job.get("state", {}).get("final_markdown", "")
     if not markdown:
         raise HTTPException(400, "No document content available for refinement")
     
     # Refine
-    previous = session.custom_extraction or session.extraction_result
+    previous = custom_extractions.get(job_id, {}).get("content", "")
+    if not previous:
+        # Fall back to original markdown if no custom extraction yet
+        previous = session.extraction_result.get("markdown_content", "") if session.extraction_result else ""
+    
     refined = custom_extractor.refine(str(previous), feedback, markdown)
+
+    # Update stored custom extraction
+    custom_extractions[job_id] = {
+        "content": refined,
+        "format": custom_extractions.get(job_id, {}).get("format", "paragraph"),
+        "intent": custom_extractions.get(job_id, {}).get("intent", "custom")
+    }
     
     # Update session
     session.messages.append(ChatMessage(role="user", content=feedback))

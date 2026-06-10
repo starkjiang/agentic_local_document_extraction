@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
-import { Send, Bot, User, Loader2, FileText } from 'lucide-react';
-import { api } from '../api';
+import { Send, Bot, Loader2, FileText } from 'lucide-react';
 
 export const ChatExtractor: React.FC = () => {
   const [file, setFile] = useState<File | null>(null);
@@ -12,21 +11,33 @@ export const ChatExtractor: React.FC = () => {
   const handleSubmit = async () => {
     if (!file || !prompt) return;
     setLoading(true);
-    
+    setResult(null);
+
     try {
       const formData = new FormData();
       formData.append('file', file);
-      formData.append('prompt', prompt);
-      
-      const response = await fetch('http://localhost:8000/extract/chat', {
-        method: 'POST',
-        body: formData
-      });
-      
+
+      const response = await fetch(
+        `http://localhost:8000/extract/chat?prompt=${encodeURIComponent(prompt)}&strategy=auto`,
+        {
+          method: 'POST',
+          body: formData
+        }
+      );
+
       const data = await response.json();
+      console.log("API Response:", data);
+
+      if (!response.ok) {
+        console.error("API Error:", data);
+        alert(`Error: ${data.detail || 'Unknown error'}`);
+        return;
+      }
+
       setResult(data);
     } catch (e) {
-      console.error(e);
+      console.error("Network error:", e);
+      alert("Failed to connect to API");
     } finally {
       setLoading(false);
     }
@@ -34,18 +45,62 @@ export const ChatExtractor: React.FC = () => {
 
   const handleRefine = async () => {
     if (!result?.session_id || !feedback) return;
+
+    try {
+      const response = await fetch(
+        `http://localhost:8000/chat/${result.session_id}/refine?feedback=${encodeURIComponent(feedback)}`,
+        { method: 'POST' }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        console.error("Refine failed:", data);
+        alert(`Refine failed: ${data.detail || JSON.stringify(data) || 'Unknown error'}`);
+        return;
+      }
+
+      setResult({
+        ...result,
+        custom_extraction: {
+          content: data.refined_extraction,
+          format: result.custom_extraction?.format || 'paragraph',
+          intent: result.custom_extraction?.intent || 'custom'
+        }
+      });
+      setFeedback('');
+    } catch (e) {
+        console.error("Refine error:", e);
+        alert("Network error during refine");
+    }
+  };
+
+  const renderContent = (content: string) => {
+    if (!content) return 'No content extracted';
     
-    const formData = new FormData();
-    formData.append('feedback', feedback);
-    
-    const response = await fetch(`http://localhost:8000/chat/${result.session_id}/refine`, {
-      method: 'POST',
-      body: formData
-    });
-    
-    const data = await response.json();
-    setResult({ ...result, custom_extraction: { content: data.refined_extraction } });
-    setFeedback('');
+    // Split by newlines and render each line properly
+    return content.split('\n').map((line: string, i: number) => {
+      const trimmed = line.trim();
+      if (!trimmed) return null;
+      
+      // Check if line starts with bullet or number
+      const isBullet = trimmed.startsWith('•') || trimmed.startsWith('-') || trimmed.startsWith('*');
+      const isNumbered = /^\d+\./.test(trimmed);
+      
+      return (
+        <div 
+          key={i} 
+          style={{ 
+            marginBottom: isBullet || isNumbered ? 12 : 8,
+            paddingLeft: isBullet || isNumbered ? 16 : 0,
+            fontWeight: isBullet || isNumbered ? 500 : 400,
+            color: '#334155'
+          }}
+        >
+          {trimmed}
+        </div>
+      );
+    }).filter(Boolean);
   };
 
   return (
@@ -56,12 +111,12 @@ export const ChatExtractor: React.FC = () => {
       </p>
 
       {/* File Upload */}
-      <div style={{ 
-        border: '2px dashed #cbd5e1', borderRadius: 16, padding: 32, 
+      <div style={{
+        border: '2px dashed #cbd5e1', borderRadius: 16, padding: 32,
         textAlign: 'center', marginBottom: 24, background: '#fff'
       }}>
-        <input 
-          type="file" accept=".pdf" 
+        <input
+          type="file" accept=".pdf"
           onChange={e => setFile(e.target.files?.[0] || null)}
           style={{ display: 'none' }} id="chat-file"
         />
@@ -128,65 +183,71 @@ export const ChatExtractor: React.FC = () => {
       {/* Results */}
       {result && (
         <div style={{ background: '#fff', borderRadius: 16, border: '1px solid #e2e8f0', overflow: 'hidden' }}>
+          
           {/* Interpretation */}
-          <div style={{ padding: 20, borderBottom: '1px solid #e2e8f0', background: '#f8fafc' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-              <Bot size={18} color="#2563eb" />
-              <span style={{ fontWeight: 600, color: '#334155' }}>I understood:</span>
-            </div>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <span style={{ padding: '4px 12px', background: '#eff6ff', color: '#2563eb', borderRadius: 20, fontSize: 13 }}>
-                Intent: {result.interpretation.intent}
-              </span>
-              <span style={{ padding: '4px 12px', background: '#f0fdf4', color: '#166534', borderRadius: 20, fontSize: 13 }}>
-                Format: {result.interpretation.output_format}
-              </span>
-              {result.interpretation.target_sections.map((s: string) => (
-                <span key={s} style={{ padding: '4px 12px', background: '#fffbeb', color: '#d97706', borderRadius: 20, fontSize: 13 }}>
-                  Section: {s}
+          {result.interpretation && (
+            <div style={{ padding: 20, borderBottom: '1px solid #e2e8f0', background: '#f8fafc' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                <Bot size={18} color="#2563eb" />
+                <span style={{ fontWeight: 600, color: '#334155' }}>I understood:</span>
+              </div>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <span style={{ padding: '4px 12px', background: '#eff6ff', color: '#2563eb', borderRadius: 20, fontSize: 13 }}>
+                  Intent: {result.interpretation.intent || 'unknown'}
                 </span>
-              ))}
+                <span style={{ padding: '4px 12px', background: '#f0fdf4', color: '#166534', borderRadius: 20, fontSize: 13 }}>
+                  Format: {result.interpretation.output_format || 'paragraph'}
+                </span>
+                {result.interpretation.target_sections?.map((s: string, i: number) => (
+                  <span key={i} style={{ padding: '4px 12px', background: '#fffbeb', color: '#d97706', borderRadius: 20, fontSize: 13 }}>
+                    Section: {s}
+                  </span>
+                ))}
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Extraction Output */}
           <div style={{ padding: 24 }}>
-            <h4 style={{ margin: '0 0 12px', fontSize: 14, color: '#64748b' }}>Extracted Content:</h4>
-            <div style={{ 
+            <h4 style={{ margin: '0 0 12px', fontSize: 14, color: '#64748b' }}>
+              Extracted Content:
+            </h4>
+            <div style={{
               background: '#f8fafc', padding: 20, borderRadius: 12,
-              fontSize: 14, lineHeight: 1.8, color: '#334155',
-              whiteSpace: 'pre-wrap'
+              fontSize: 14, lineHeight: 1.6, color: '#334155'
             }}>
-              {result.custom_extraction?.content || result.standard_result?.markdown_content || 'No content extracted'}
+              {renderContent(result.custom_extraction?.content || '')}
             </div>
           </div>
 
           {/* Refinement */}
-          <div style={{ padding: '0 24px 24px' }}>
-            <div style={{ display: 'flex', gap: 12 }}>
-              <input
-                type="text"
-                value={feedback}
-                onChange={e => setFeedback(e.target.value)}
-                placeholder="Refine: e.g., 'Make it shorter' or 'Add more detail'"
-                style={{
-                  flex: 1, padding: '12px 16px', borderRadius: 10,
-                  border: '1px solid #e2e8f0', fontSize: 14
-                }}
-              />
-              <button
-                onClick={handleRefine}
-                disabled={!feedback}
-                style={{
-                  padding: '12px 20px', background: '#334155', color: '#fff',
-                  border: 'none', borderRadius: 10, fontWeight: 500,
-                  cursor: 'pointer'
-                }}
-              >
-                Refine
-              </button>
+          {result.session_id && (
+            <div style={{ padding: '0 24px 24px' }}>
+              <div style={{ display: 'flex', gap: 12 }}>
+                <input
+                  type="text"
+                  value={feedback}
+                  onChange={e => setFeedback(e.target.value)}
+                  placeholder="Refine: e.g., 'Make it shorter' or 'Add more detail'"
+                  style={{
+                    flex: 1, padding: '12px 16px', borderRadius: 10,
+                    border: '1px solid #e2e8f0', fontSize: 14
+                  }}
+                />
+                <button
+                  onClick={handleRefine}
+                  disabled={!feedback}
+                  style={{
+                    padding: '12px 20px', background: '#334155', color: '#fff',
+                    border: 'none', borderRadius: 10, fontWeight: 500,
+                    cursor: 'pointer'
+                  }}
+                >
+                  Refine
+                </button>
+              </div>
             </div>
-          </div>
+          )}
         </div>
       )}
     </div>

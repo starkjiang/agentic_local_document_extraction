@@ -4,7 +4,7 @@ and converts them into structured extraction plans.
 """
 
 import json
-from typing import Dict, Any
+import re
 
 from src.models import UserPrompt, PromptInterpretation
 from src.tools.llm_tools import ollama_client
@@ -81,15 +81,29 @@ Respond with ONLY valid JSON matching the schema."""
             return self._fallback_interpret(user_text)
     
     def _fallback_interpret(self, text: str) -> PromptInterpretation:
-        """Simple keyword-based fallback."""
+        """Simple keyword-based fallback with number detection."""
         text_lower = text.lower()
+        
+        # DETECT NUMBER: extract N from "N bullet points", "summarize in N points", etc.
+        number_match = re.search(r'(\d+)\s*(?:bullet|point|item|line|sentence|paragraph)', text_lower)
+        detected_count = int(number_match.group(1)) if number_match else None
+        
+        # Also check for written numbers
+        written_numbers = {
+            'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5,
+            'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10
+        }
+        for word, num in written_numbers.items():
+            if f"{word} bullet" in text_lower or f"{word} point" in text_lower:
+                detected_count = num
+                break
         
         # Detect intent
         if any(w in text_lower for w in ["method", "section", "chapter", "part"]):
             intent = "extract_section"
         elif any(w in text_lower for w in ["summarize", "summary", "brief", "overview"]):
             intent = "summarize"
-        elif any(w in text_lower for w in ["extract", "find", "get", "pull"]):
+        elif any(w in text_lower for w in ["extract", "find", "get", "pull", "list"]):
             intent = "find_entities"
         else:
             intent = "custom"
@@ -121,16 +135,16 @@ Respond with ONLY valid JSON matching the schema."""
             if any(kw in text_lower for kw in keywords):
                 sections.append(section)
         
-        # Detect constraints
+        # Build constraints with detected count
         constraints = []
+        if detected_count:
+            constraints.append(f"max_{detected_count}")
         if "only" in text_lower:
             constraints.append("exclude_others")
         if any(w in text_lower for w in ["short", "brief", "concise"]):
-            constraints.append("max_3_points")
+            constraints.append("be_concise")
         if "date" in text_lower:
             constraints.append("include_dates")
-        if "no reference" in text_lower or "exclude reference" in text_lower:
-            constraints.append("exclude_references")
         
         return PromptInterpretation(
             intent=intent,
